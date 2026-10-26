@@ -26,12 +26,15 @@ final class ResizeController {
     private struct GestureSession {
         let window: AXUIElement
         let startFrame: CGRect
+        let maximumSize: CGSize
         let directionInverted: Bool
         var fingerDelta: CGPoint = .zero
     }
+
     private struct WheelSession {
         let window: AXUIElement
         var frame: CGRect
+        let maximumSize: CGSize
         var lastEvent: Date
     }
 
@@ -103,6 +106,7 @@ final class ResizeController {
         gesture = GestureSession(
             window: window,
             startFrame: frame,
+            maximumSize: Self.maximumSize(for: frame),
             directionInverted: NSEvent(cgEvent: event)?.isDirectionInvertedFromDevice ?? true
         )
         applier.beginInteraction(with: window)
@@ -121,14 +125,30 @@ final class ResizeController {
         gesture = session
 
         let start = session.startFrame
-        let frame = CGRect(
-            origin: start.origin,
-            size: CGSize(
-                width: max(Self.minimumSize.width, start.width + session.fingerDelta.x),
-                height: max(Self.minimumSize.height, start.height + session.fingerDelta.y)
-            )
+        let size = Self.clamp(
+            CGSize(width: start.width + session.fingerDelta.x, height: start.height + session.fingerDelta.y),
+            maximum: session.maximumSize
         )
-        applier.resize(session.window, to: .init(frame: frame, anchor: .zero))
+        applier.resize(session.window, to: .init(frame: CGRect(origin: start.origin, size: size), anchor: .zero))
+    }
+
+    /// Largest size that keeps the bottom-right corner on the window's
+    /// display. A window already hanging off-screen may keep its current size.
+    private static func maximumSize(for frame: CGRect) -> CGSize {
+        guard let bounds = ScreenGeometry.bounds(for: frame, in: ScreenGeometry.visibleBounds()) else {
+            return CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        }
+        return CGSize(
+            width: max(bounds.maxX - frame.minX, frame.width),
+            height: max(bounds.maxY - frame.minY, frame.height)
+        )
+    }
+
+    private static func clamp(_ size: CGSize, maximum: CGSize) -> CGSize {
+        CGSize(
+            width: min(maximum.width, max(minimumSize.width, size.width)),
+            height: min(maximum.height, max(minimumSize.height, size.height))
+        )
     }
 
     private func endGesture() {
@@ -148,7 +168,7 @@ final class ResizeController {
                 wheel = nil
                 return event
             }
-            wheel = WheelSession(window: window, frame: frame, lastEvent: now)
+            wheel = WheelSession(window: window, frame: frame, maximumSize: Self.maximumSize(for: frame), lastEvent: now)
         }
         guard var session = wheel else { return event }
 
@@ -157,10 +177,7 @@ final class ResizeController {
         let scale = max(0.1, 1 + Self.wheelScaleStep * notchesAway)
 
         let old = session.frame
-        let size = CGSize(
-            width: max(Self.minimumSize.width, old.width * scale),
-            height: max(Self.minimumSize.height, old.height * scale)
-        )
+        let size = Self.clamp(CGSize(width: old.width * scale, height: old.height * scale), maximum: session.maximumSize)
         let frame = CGRect(origin: old.origin, size: size)
 
         session.frame = frame

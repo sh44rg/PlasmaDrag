@@ -9,7 +9,8 @@ KDE Plasma-style window management for macOS, living in the menu bar.
 | Option + mouse wheel | Grow / shrink from the bottom-right corner |
 
 Resizing always acts on the focused window, wherever the cursor is, and keeps
-its top-left corner in place.
+its top-left corner in place. Neither moving nor resizing lets a window extend
+past the edges of its display (menu bar and Dock excluded).
 
 A plain Option-click (no drag) still reaches the app underneath.
 

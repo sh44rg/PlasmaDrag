@@ -1,4 +1,3 @@
-import AppKit
 import ApplicationServices
 import CoreGraphics
 
@@ -19,8 +18,6 @@ final class MoveController {
         let startMouse: CGPoint
         let startOrigin: CGPoint
         let downEvent: CGEvent
-        /// Usable area (excluding menu bar and Dock) of each display, in
-        /// top-left-origin global coordinates.
         let screenBounds: [CGRect]
     }
 
@@ -64,7 +61,7 @@ final class MoveController {
             startMouse: event.location,
             startOrigin: frame.origin,
             downEvent: downEvent,
-            screenBounds: Self.visibleScreenBounds()
+            screenBounds: ScreenGeometry.visibleBounds()
         ))
         return nil
     }
@@ -94,26 +91,11 @@ final class MoveController {
     /// Keeps the window inside the display under the cursor. Windows larger
     /// than the display stick to its top-left corner.
     private static func clamp(_ origin: CGPoint, size: CGSize, cursor: CGPoint, screens: [CGRect]) -> CGPoint {
-        let nearest = screens.min { distance(from: cursor, to: $0) < distance(from: cursor, to: $1) }
-        guard let bounds = screens.first(where: { $0.contains(cursor) }) ?? nearest else { return origin }
+        guard let bounds = ScreenGeometry.bounds(containing: cursor, in: screens) else { return origin }
         return CGPoint(
             x: max(bounds.minX, min(origin.x, bounds.maxX - size.width)),
             y: max(bounds.minY, min(origin.y, bounds.maxY - size.height))
         )
-    }
-
-    private static func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
-        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
-        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
-        return hypot(dx, dy)
-    }
-
-    private static func visibleScreenBounds() -> [CGRect] {
-        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return [] }
-        return NSScreen.screens.map { screen in
-            let visible = screen.visibleFrame
-            return CGRect(x: visible.minX, y: primaryHeight - visible.maxY, width: visible.width, height: visible.height)
-        }
     }
 
     private func mouseUp(_ event: CGEvent) -> CGEvent? {
