@@ -5,13 +5,13 @@ KDE Plasma-style window management for macOS, living in the menu bar.
 | Gesture | Action |
 | --- | --- |
 | Option + left-drag anywhere in a window | Move the window |
-| Option + two-finger drag on the trackpad | Resize from the nearest corner |
-| Option + mouse wheel | Grow / shrink around the center |
+| Option + two-finger drag on the trackpad | Resize by moving the bottom-right corner |
+| Option + mouse wheel | Grow / shrink from the bottom-right corner |
 
-Resizing works like KDE: the quadrant of the window the cursor is in when the
-gesture starts decides which edges move. With the cursor in the bottom-right
-quarter, dragging right/down grows the window to the right and down; in the
-top-left quarter, dragging left/up grows it to the left and up.
+Resizing always keeps the top-left corner in place. Once a resize starts, it
+stays locked to that window even if it shrinks out from under the cursor.
+Lifting your fingers and scrolling again without moving the cursor continues
+resizing the same window; move the cursor to target a different one.
 
 A plain Option-click (no drag) still reaches the app underneath.
 

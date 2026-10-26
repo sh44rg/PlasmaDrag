@@ -2,8 +2,9 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
-/// Option + two-finger trackpad drag resizes the window under the cursor from
-/// its nearest corner. Option + mouse wheel scales it around its center.
+/// Option + two-finger trackpad drag resizes the window under the cursor by
+/// moving its bottom-right corner. Option + mouse wheel grows/shrinks it the
+/// same way.
 final class ResizeController {
     private static let minimumSize = CGSize(width: 120, height: 80)
     private static let wheelScaleStep: CGFloat = 0.05
@@ -25,10 +26,16 @@ final class ResizeController {
     private struct GestureSession {
         let window: AXUIElement
         let startFrame: CGRect
-        let movesLeftEdge: Bool
-        let movesTopEdge: Bool
         let directionInverted: Bool
         var fingerDelta: CGPoint = .zero
+    }
+
+    /// The window the last gesture resized and where the cursor was. Scrolling
+    /// never moves the cursor, so as long as it stays put, follow-up gestures
+    /// keep targeting this window even if it no longer sits under the cursor.
+    private struct LockedTarget {
+        let window: AXUIElement
+        let cursor: CGPoint
     }
 
     private struct WheelSession {
@@ -39,6 +46,7 @@ final class ResizeController {
 
     private let applier: AXApplier
     private var gesture: GestureSession?
+    private var lockedTarget: LockedTarget?
     private var swallowingMomentum = false
     private var wheel: WheelSession?
 
@@ -101,17 +109,29 @@ final class ResizeController {
 
     private func beginGesture(with event: CGEvent) -> Bool {
         let location = event.location
-        guard let window = WindowLocator.window(at: location), let frame = window.frame else { return false }
+        let window: AXUIElement
+        let frame: CGRect
+        if let locked = lockedTarget, hypot(location.x - locked.cursor.x, location.y - locked.cursor.y) < 1,
+           let lockedFrame = locked.window.frame {
+            window = locked.window
+            frame = lockedFrame
+        } else {
+            guard let found = WindowLocator.window(at: location), let foundFrame = found.frame else {
+                lockedTarget = nil
+                return false
+            }
+            window = found
+            frame = foundFrame
+            applier.raise(window)
+        }
 
+        lockedTarget = LockedTarget(window: window, cursor: location)
         gesture = GestureSession(
             window: window,
             startFrame: frame,
-            movesLeftEdge: location.x < frame.midX,
-            movesTopEdge: location.y < frame.midY,
             directionInverted: NSEvent(cgEvent: event)?.isDirectionInvertedFromDevice ?? true
         )
         applier.beginInteraction(with: window)
-        applier.raise(window)
         updateGesture(with: event)
         return true
     }
@@ -127,19 +147,14 @@ final class ResizeController {
         gesture = session
 
         let start = session.startFrame
-        let dx = session.fingerDelta.x
-        let dy = session.fingerDelta.y
-
-        let width = max(Self.minimumSize.width, session.movesLeftEdge ? start.width - dx : start.width + dx)
-        let height = max(Self.minimumSize.height, session.movesTopEdge ? start.height - dy : start.height + dy)
         let frame = CGRect(
-            x: session.movesLeftEdge ? start.maxX - width : start.minX,
-            y: session.movesTopEdge ? start.maxY - height : start.minY,
-            width: width,
-            height: height
+            origin: start.origin,
+            size: CGSize(
+                width: max(Self.minimumSize.width, start.width + session.fingerDelta.x),
+                height: max(Self.minimumSize.height, start.height + session.fingerDelta.y)
+            )
         )
-        let anchor = CGPoint(x: session.movesLeftEdge ? 1 : 0, y: session.movesTopEdge ? 1 : 0)
-        applier.resize(session.window, to: .init(frame: frame, anchor: anchor))
+        applier.resize(session.window, to: .init(frame: frame, anchor: .zero))
     }
 
     private func endGesture() {
@@ -172,12 +187,12 @@ final class ResizeController {
             width: max(Self.minimumSize.width, old.width * scale),
             height: max(Self.minimumSize.height, old.height * scale)
         )
-        let frame = CGRect(x: old.midX - size.width / 2, y: old.midY - size.height / 2, width: size.width, height: size.height)
+        let frame = CGRect(origin: old.origin, size: size)
 
         session.frame = frame
         session.lastEvent = now
         wheel = session
-        applier.resize(session.window, to: .init(frame: frame, anchor: CGPoint(x: 0.5, y: 0.5)))
+        applier.resize(session.window, to: .init(frame: frame, anchor: .zero))
         return nil
     }
 }
