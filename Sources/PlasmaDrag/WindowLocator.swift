@@ -8,27 +8,15 @@ extension AXUIElement {
         return value as? T
     }
 
-    var role: String? { attribute(kAXRoleAttribute) }
-
     var pid: pid_t? {
         var pid: pid_t = 0
         return AXUIElementGetPid(self, &pid) == .success ? pid : nil
     }
 
-    var position: CGPoint? {
-        guard let value: AXValue = attribute(kAXPositionAttribute) else { return nil }
-        var point = CGPoint.zero
-        return AXValueGetValue(value, .cgPoint, &point) ? point : nil
-    }
-
-    var size: CGSize? {
-        guard let value: AXValue = attribute(kAXSizeAttribute) else { return nil }
-        var size = CGSize.zero
-        return AXValueGetValue(value, .cgSize, &size) ? size : nil
-    }
-
     var frame: CGRect? {
-        guard let position, let size else { return nil }
+        let values = attributes([kAXPositionAttribute, kAXSizeAttribute])
+        guard let position = axValue(values[0], .cgPoint, CGPoint.zero),
+              let size = axValue(values[1], .cgSize, CGSize.zero) else { return nil }
         return CGRect(origin: position, size: size)
     }
 
@@ -46,10 +34,30 @@ extension AXUIElement {
         return AXUIElementSetAttributeValue(self, kAXSizeAttribute as CFString, value) == .success
     }
 
-    func isSettable(_ name: String) -> Bool {
-        var settable: DarwinBoolean = false
-        return AXUIElementIsAttributeSettable(self, name as CFString, &settable) == .success && settable.boolValue
+    /// Fetches several attributes in one IPC round-trip. Missing or failed
+    /// attributes come back as nil.
+    func attributes(_ names: [String]) -> [AnyObject?] {
+        var raw: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(self, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
+              let values = raw as? [AnyObject], values.count == names.count else {
+            return Array(repeating: nil, count: names.count)
+        }
+        return values.map { value in
+            if CFGetTypeID(value) == AXValueGetTypeID(), AXValueGetType(value as! AXValue) == .axError { return nil }
+            return value
+        }
     }
+}
+
+private func axElement(_ value: AnyObject?) -> AXUIElement? {
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+private func axValue<T: BitwiseCopyable>(_ value: AnyObject?, _ type: AXValueType, _ initial: T) -> T? {
+    guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    var result = initial
+    return AXValueGetValue(value as! AXValue, type, &result) ? result : nil
 }
 
 enum WindowLocator {
@@ -69,21 +77,46 @@ enum WindowLocator {
         "com.apple.notificationcenterui",
     ]
 
+    struct Target {
+        let window: AXUIElement
+        let frame: CGRect
+    }
+
+    /// Cached per process so the Launch Services lookup happens once per app.
+    private static var ignoredByPID: [pid_t: Bool] = [:]
+
     /// The movable window under `point` (global, top-left origin), if any.
-    static func window(at point: CGPoint) -> AXUIElement? {
-        if let window = windowViaHitTest(at: point) ?? windowViaWindowList(at: point),
-           isEligible(window) {
-            return window
-        }
-        return nil
+    static func window(at point: CGPoint) -> Target? {
+        guard let window = windowViaHitTest(at: point) ?? windowViaWindowList(at: point) else { return nil }
+        return target(for: window)
     }
 
     /// The focused window of the frontmost app, if it can be moved/resized.
-    static func focusedWindow() -> AXUIElement? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+    static func focusedWindow() -> Target? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, !isIgnored(pid) else { return nil }
         let app = AXUIElementCreateApplication(pid)
-        guard let window: AXUIElement = app.attribute(kAXFocusedWindowAttribute), isEligible(window) else { return nil }
-        return window
+        guard let window: AXUIElement = app.attribute(kAXFocusedWindowAttribute) else { return nil }
+        return target(for: window)
+    }
+
+    /// Reads position, size and fullscreen state in a single AX round-trip.
+    private static func target(for window: AXUIElement) -> Target? {
+        guard let pid = window.pid, !isIgnored(pid) else { return nil }
+
+        let values = window.attributes([kAXPositionAttribute, kAXSizeAttribute, "AXFullScreen"])
+        if (values[2] as? Bool) == true { return nil }
+        guard let position = axValue(values[0], .cgPoint, CGPoint.zero),
+              let size = axValue(values[1], .cgSize, CGSize.zero) else { return nil }
+
+        return Target(window: window, frame: CGRect(origin: position, size: size))
+    }
+
+    private static func isIgnored(_ pid: pid_t) -> Bool {
+        if let cached = ignoredByPID[pid] { return cached }
+        let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let ignored = pid == ownPID || bundleID.map(ignoredBundleIDs.contains) == true
+        ignoredByPID[pid] = ignored
+        return ignored
     }
 
     private static func windowViaHitTest(at point: CGPoint) -> AXUIElement? {
@@ -91,12 +124,13 @@ enum WindowLocator {
         guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
               var current = element else { return nil }
 
-        if current.role == kAXWindowRole as String { return current }
-        if let window: AXUIElement = current.attribute(kAXWindowAttribute) { return window }
-
+        // One round-trip per level; nearly every element answers AXWindow
+        // directly, so this usually finishes on the first iteration.
         for _ in 0..<64 {
-            guard let parent: AXUIElement = current.attribute(kAXParentAttribute) else { return nil }
-            if parent.role == kAXWindowRole as String { return parent }
+            let values = current.attributes([kAXRoleAttribute, kAXWindowAttribute, kAXParentAttribute])
+            if values[0] as? String == kAXWindowRole as String { return current }
+            if let window = axElement(values[1]) { return window }
+            guard let parent = axElement(values[2]) else { return nil }
             current = parent
         }
         return nil
@@ -125,15 +159,5 @@ enum WindowLocator {
             }
         }
         return nil
-    }
-
-    private static func isEligible(_ window: AXUIElement) -> Bool {
-        guard let pid = window.pid, pid != ownPID else { return false }
-        if let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
-           ignoredBundleIDs.contains(bundleID) {
-            return false
-        }
-        if let fullScreen: Bool = window.attribute("AXFullScreen"), fullScreen { return false }
-        return window.isSettable(kAXPositionAttribute)
     }
 }

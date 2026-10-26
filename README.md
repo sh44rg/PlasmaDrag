@@ -30,6 +30,19 @@ relaunch needed.
 
 The menu bar icon has toggles for enabling/disabling PlasmaDrag and Launch at Login.
 
+## Resource usage
+
+Idle, PlasmaDrag uses 0% CPU, has 0 wakeups, and has a ~12 MB memory footprint.
+
+- The only always-on hook is a listen-only tap for modifier-key changes. The
+  tap that intercepts mouse and scroll events is enabled only while Option is
+  held, so ordinary scrolling and dragging never pass through PlasmaDrag.
+- Window geometry is written on a background queue with latest-wins
+  coalescing, deduplicated to whole-point changes.
+- Window lookups batch their Accessibility reads into single round-trips.
+- No timers or polling, except a 1 s check while waiting for Accessibility
+  permission.
+
 ## Known limitations
 
 - **Rebuilding resets permission.** Each build gets a new ad-hoc signature,
@@ -43,5 +56,7 @@ The menu bar icon has toggles for enabling/disabling PlasmaDrag and Launch at Lo
   selection in editors, duplicating objects in design tools. Option+scroll is
   likewise used for resizing. Use the **Enabled** toggle in the menu to
   turn PlasmaDrag off temporarily.
+- When a password field or Secure Keyboard Entry is active, macOS may hide
+  the Option key press from PlasmaDrag, so gestures may not trigger until it ends.
 - Option-clicks reach the app on mouse-up instead of mouse-down, because
   PlasmaDrag waits to see if a drag follows.

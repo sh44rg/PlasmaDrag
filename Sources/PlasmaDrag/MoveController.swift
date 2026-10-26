@@ -19,10 +19,16 @@ final class MoveController {
         let startOrigin: CGPoint
         let downEvent: CGEvent
         let screenBounds: [CGRect]
+        var lastOrigin: CGPoint
     }
 
     private let applier: AXApplier
     private var state: State = .idle
+
+    var isActive: Bool {
+        if case .idle = state { return false }
+        return true
+    }
 
     init(applier: AXApplier) {
         self.applier = applier
@@ -51,23 +57,23 @@ final class MoveController {
     private func mouseDown(_ event: CGEvent) -> CGEvent? {
         reset()
         guard event.hasExactlyOptionModifier,
-              let window = WindowLocator.window(at: event.location),
-              let frame = window.frame,
+              let target = WindowLocator.window(at: event.location),
               let downEvent = event.copy() else { return event }
 
         state = .pending(Session(
-            window: window,
-            size: frame.size,
+            window: target.window,
+            size: target.frame.size,
             startMouse: event.location,
-            startOrigin: frame.origin,
+            startOrigin: target.frame.origin,
             downEvent: downEvent,
-            screenBounds: ScreenGeometry.visibleBounds()
+            screenBounds: ScreenGeometry.visibleBounds(),
+            lastOrigin: target.frame.origin
         ))
         return nil
     }
 
     private func mouseDragged(_ event: CGEvent) -> CGEvent? {
-        let session: Session
+        var session: Session
         switch state {
         case .idle:
             return event
@@ -75,7 +81,6 @@ final class MoveController {
             let delta = event.location - pendingSession.startMouse
             guard hypot(delta.x, delta.y) >= Self.dragThreshold else { return nil }
             session = pendingSession
-            state = .dragging(session)
             applier.beginInteraction(with: session.window)
             applier.raise(session.window)
         case let .dragging(draggingSession):
@@ -83,8 +88,14 @@ final class MoveController {
         }
 
         let delta = event.location - session.startMouse
-        let origin = Self.clamp(session.startOrigin + delta, size: session.size, cursor: event.location, screens: session.screenBounds)
-        applier.move(session.window, to: origin)
+        var origin = Self.clamp(session.startOrigin + delta, size: session.size, cursor: event.location, screens: session.screenBounds)
+        origin = CGPoint(x: origin.x.rounded(), y: origin.y.rounded())
+
+        if origin != session.lastOrigin {
+            session.lastOrigin = origin
+            applier.move(session.window, to: origin)
+        }
+        state = .dragging(session)
         return nil
     }
 

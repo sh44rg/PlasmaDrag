@@ -21,40 +21,43 @@ extension CGEvent {
     }
 }
 
-/// Active (event-modifying) session tap. The handler returns the event to let
-/// it through, or nil to swallow it.
+/// A session-level event tap on the main run loop. For active taps the
+/// handler returns the event to let it through, or nil to swallow it.
 final class EventTap {
     typealias Handler = (CGEventType, CGEvent) -> CGEvent?
 
+    private let mask: CGEventMask
+    private let options: CGEventTapOptions
     private let handler: Handler
-    private let onReset: () -> Void
+    private let onDisabledBySystem: () -> Void
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
-    var isRunning: Bool {
-        guard let tap else { return false }
-        return CGEvent.tapIsEnabled(tap: tap)
-    }
+    /// Tracked locally so toggling per event never needs a window server
+    /// round-trip to query the current state.
+    private(set) var isEnabled = false
 
-    init(handler: @escaping Handler, onReset: @escaping () -> Void) {
+    var isCreated: Bool { tap != nil }
+
+    init(
+        events: [CGEventType],
+        options: CGEventTapOptions,
+        handler: @escaping Handler,
+        onDisabledBySystem: @escaping () -> Void
+    ) {
+        self.mask = events.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        self.options = options
         self.handler = handler
-        self.onReset = onReset
+        self.onDisabledBySystem = onDisabledBySystem
     }
 
-    @discardableResult
-    func start() -> Bool {
-        if tap != nil {
-            ensureEnabled()
-            return true
-        }
-
-        let types: [CGEventType] = [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel]
-        let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+    func create(enabled: Bool) -> Bool {
+        if tap != nil { return true }
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
+            options: options,
             eventsOfInterest: mask,
             callback: eventTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -64,14 +67,16 @@ final class EventTap {
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-
         self.tap = tap
         self.runLoopSource = source
+
+        // A new tap starts enabled.
+        isEnabled = true
+        setEnabled(enabled)
         return true
     }
 
-    func stop() {
+    func destroy() {
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
@@ -81,18 +86,20 @@ final class EventTap {
         }
         tap = nil
         runLoopSource = nil
+        isEnabled = false
     }
 
-    func ensureEnabled() {
-        guard let tap, !CGEvent.tapIsEnabled(tap: tap) else { return }
-        CGEvent.tapEnable(tap: tap, enable: true)
+    func setEnabled(_ enabled: Bool, force: Bool = false) {
+        guard let tap, enabled != isEnabled || force else { return }
+        CGEvent.tapEnable(tap: tap, enable: enabled)
+        isEnabled = enabled
     }
 
     fileprivate func process(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            onReset()
-            ensureEnabled()
+            isEnabled = false
+            onDisabledBySystem()
             return Unmanaged.passUnretained(event)
         default:
             break

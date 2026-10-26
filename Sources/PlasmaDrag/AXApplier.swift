@@ -5,17 +5,9 @@ import Foundation
 /// recent pending change is kept, so a burst of drag events collapses into as
 /// many AX writes as the target app can actually keep up with.
 final class AXApplier {
-    struct ResizeTarget {
-        var frame: CGRect
-        /// Unit point of `frame` that must end up where requested even if the
-        /// app clamps the size: (0,0) pins the top-left, (1,1) the
-        /// bottom-right, (0.5,0.5) the center.
-        var anchor: CGPoint
-    }
-
     private enum Operation {
         case move(AXUIElement, CGPoint)
-        case resize(AXUIElement, ResizeTarget)
+        case resize(AXUIElement, CGSize)
     }
 
     private let queue = DispatchQueue(label: "com.shaaravg.plasmadrag.ax", qos: .userInteractive)
@@ -29,8 +21,8 @@ final class AXApplier {
         submit(.move(window, origin))
     }
 
-    func resize(_ window: AXUIElement, to target: ResizeTarget) {
-        submit(.resize(window, target))
+    func resize(_ window: AXUIElement, to size: CGSize) {
+        submit(.resize(window, size))
     }
 
     func raise(_ window: AXUIElement) {
@@ -99,20 +91,8 @@ final class AXApplier {
         case let .move(window, origin):
             window.setPosition(origin)
 
-        case let .resize(window, target):
-            let frame = target.frame
-            window.setSize(frame.size)
-            guard target.anchor != .zero else { return }
-
-            let actual = window.size ?? frame.size
-            let pinned = CGPoint(
-                x: frame.minX + frame.width * target.anchor.x,
-                y: frame.minY + frame.height * target.anchor.y
-            )
-            window.setPosition(CGPoint(
-                x: pinned.x - actual.width * target.anchor.x,
-                y: pinned.y - actual.height * target.anchor.y
-            ))
+        case let .resize(window, size):
+            window.setSize(size)
         }
     }
 }

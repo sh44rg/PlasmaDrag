@@ -8,14 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var trustPollTimer: Timer?
-
-    private let applier = AXApplier()
-    private lazy var moveController = MoveController(applier: applier)
-    private lazy var resizeController = ResizeController(applier: applier)
-    private lazy var eventTap = EventTap(
-        handler: { [unowned self] type, event in self.handle(type: type, event: event) },
-        onReset: { [unowned self] in self.resetControllers() }
-    )
+    private let engine = GestureEngine()
+    private var appNapActivity: NSObjectProtocol?
 
     private var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
@@ -23,6 +17,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // App Nap would delay delivery of the Option key-down that arms the
+        // pointer tap. The process is blocked in the run loop when idle, so
+        // opting out costs no CPU.
+        appNapActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Responding to window move/resize gestures"
+        )
+
         setUpStatusItem()
 
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -39,34 +41,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: - Event routing
-
-    private func handle(type: CGEventType, event: CGEvent) -> CGEvent? {
-        switch type {
-        case .leftMouseDown, .leftMouseDragged, .leftMouseUp:
-            return moveController.handle(type: type, event: event)
-        case .scrollWheel:
-            return resizeController.handle(event: event)
-        default:
-            return event
-        }
-    }
-
-    private func resetControllers() {
-        moveController.reset()
-        resizeController.reset()
-    }
+    // MARK: - Engine
 
     private func startTapIfNeeded() {
         guard isEnabled, AXIsProcessTrusted() else { return }
-        if !eventTap.start() {
-            NSLog("PlasmaDrag: failed to create event tap")
+        if !engine.start() {
+            NSLog("PlasmaDrag: failed to create event taps")
         }
         updateStatusIcon()
     }
 
     @objc private func systemDidWake() {
-        if isEnabled { eventTap.ensureEnabled() }
+        engine.systemDidWake()
     }
 
     // MARK: - Accessibility
@@ -78,12 +64,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         trustPollTimer?.invalidate()
-        trustPollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] timer in
             guard AXIsProcessTrusted() else { return }
             timer.invalidate()
             self?.trustPollTimer = nil
             self?.startTapIfNeeded()
         }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        trustPollTimer = timer
     }
 
     // MARK: - Status item
@@ -97,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStatusIcon() {
         guard let button = statusItem?.button else { return }
-        let symbol = isEnabled && eventTap.isRunning ? "macwindow.on.rectangle" : "macwindow"
+        let symbol = isEnabled && engine.isRunning ? "macwindow.on.rectangle" : "macwindow"
         if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "PlasmaDrag") {
             image.isTemplate = true
             button.image = image
@@ -105,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             button.title = "PD"
         }
-        button.appearsDisabled = !(isEnabled && eventTap.isRunning)
+        button.appearsDisabled = !(isEnabled && engine.isRunning)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -156,8 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             startTapIfNeeded()
             if !AXIsProcessTrusted() { requestAccessibility() }
         } else {
-            eventTap.stop()
-            resetControllers()
+            engine.stop()
         }
         updateStatusIcon()
     }
