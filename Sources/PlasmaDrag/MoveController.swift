@@ -1,7 +1,8 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 
-/// Option + left-drag moves the window under the cursor.
+/// Option + left-drag moves the window under the cursor, keeping it on screen.
 final class MoveController {
     private static let dragThreshold: CGFloat = 3
 
@@ -14,9 +15,13 @@ final class MoveController {
 
     private struct Session {
         let window: AXUIElement
+        let size: CGSize
         let startMouse: CGPoint
         let startOrigin: CGPoint
         let downEvent: CGEvent
+        /// Usable area (excluding menu bar and Dock) of each display, in
+        /// top-left-origin global coordinates.
+        let screenBounds: [CGRect]
     }
 
     private let applier: AXApplier
@@ -50,10 +55,17 @@ final class MoveController {
         reset()
         guard event.hasExactlyOptionModifier,
               let window = WindowLocator.window(at: event.location),
-              let origin = window.position,
+              let frame = window.frame,
               let downEvent = event.copy() else { return event }
 
-        state = .pending(Session(window: window, startMouse: event.location, startOrigin: origin, downEvent: downEvent))
+        state = .pending(Session(
+            window: window,
+            size: frame.size,
+            startMouse: event.location,
+            startOrigin: frame.origin,
+            downEvent: downEvent,
+            screenBounds: Self.visibleScreenBounds()
+        ))
         return nil
     }
 
@@ -74,8 +86,34 @@ final class MoveController {
         }
 
         let delta = event.location - session.startMouse
-        applier.move(session.window, to: session.startOrigin + delta)
+        let origin = Self.clamp(session.startOrigin + delta, size: session.size, cursor: event.location, screens: session.screenBounds)
+        applier.move(session.window, to: origin)
         return nil
+    }
+
+    /// Keeps the window inside the display under the cursor. Windows larger
+    /// than the display stick to its top-left corner.
+    private static func clamp(_ origin: CGPoint, size: CGSize, cursor: CGPoint, screens: [CGRect]) -> CGPoint {
+        let nearest = screens.min { distance(from: cursor, to: $0) < distance(from: cursor, to: $1) }
+        guard let bounds = screens.first(where: { $0.contains(cursor) }) ?? nearest else { return origin }
+        return CGPoint(
+            x: max(bounds.minX, min(origin.x, bounds.maxX - size.width)),
+            y: max(bounds.minY, min(origin.y, bounds.maxY - size.height))
+        )
+    }
+
+    private static func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let dx = max(rect.minX - point.x, 0, point.x - rect.maxX)
+        let dy = max(rect.minY - point.y, 0, point.y - rect.maxY)
+        return hypot(dx, dy)
+    }
+
+    private static func visibleScreenBounds() -> [CGRect] {
+        guard let primaryHeight = NSScreen.screens.first?.frame.height else { return [] }
+        return NSScreen.screens.map { screen in
+            let visible = screen.visibleFrame
+            return CGRect(x: visible.minX, y: primaryHeight - visible.maxY, width: visible.width, height: visible.height)
+        }
     }
 
     private func mouseUp(_ event: CGEvent) -> CGEvent? {

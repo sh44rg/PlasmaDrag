@@ -4,7 +4,7 @@ KDE Plasma-style window management for macOS, living in the menu bar.
 
 | Gesture | Action |
 | --- | --- |
-| Option + left-drag anywhere in a window | Move the window |
+| Option + left-drag anywhere in a window | Move the window (kept within the display under the cursor) |
 | Option + two-finger drag on the trackpad | Resize by moving the bottom-right corner |
 | Option + mouse wheel | Grow / shrink from the bottom-right corner |
 
