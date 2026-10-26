@@ -8,10 +8,8 @@ KDE Plasma-style window management for macOS, living in the menu bar.
 | Option + two-finger drag on the trackpad | Resize by moving the bottom-right corner |
 | Option + mouse wheel | Grow / shrink from the bottom-right corner |
 
-Resizing always keeps the top-left corner in place. Once a resize starts, it
-stays locked to that window even if it shrinks out from under the cursor.
-Lifting your fingers and scrolling again without moving the cursor continues
-resizing the same window; move the cursor to target a different one.
+Resizing always acts on the focused window, wherever the cursor is, and keeps
+its top-left corner in place.
 
 A plain Option-click (no drag) still reaches the app underneath.
 

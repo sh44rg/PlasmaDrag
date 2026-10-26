@@ -2,8 +2,8 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
-/// Option + two-finger trackpad drag resizes the window under the cursor by
-/// moving its bottom-right corner. Option + mouse wheel grows/shrinks it the
+/// Option + two-finger trackpad drag resizes the focused window, wherever the
+/// cursor is, by moving its bottom-right corner. Option + mouse wheel grows/shrinks it the
 /// same way.
 final class ResizeController {
     private static let minimumSize = CGSize(width: 120, height: 80)
@@ -29,15 +29,6 @@ final class ResizeController {
         let directionInverted: Bool
         var fingerDelta: CGPoint = .zero
     }
-
-    /// The window the last gesture resized and where the cursor was. Scrolling
-    /// never moves the cursor, so as long as it stays put, follow-up gestures
-    /// keep targeting this window even if it no longer sits under the cursor.
-    private struct LockedTarget {
-        let window: AXUIElement
-        let cursor: CGPoint
-    }
-
     private struct WheelSession {
         let window: AXUIElement
         var frame: CGRect
@@ -46,7 +37,6 @@ final class ResizeController {
 
     private let applier: AXApplier
     private var gesture: GestureSession?
-    private var lockedTarget: LockedTarget?
     private var swallowingMomentum = false
     private var wheel: WheelSession?
 
@@ -108,24 +98,8 @@ final class ResizeController {
     // MARK: - Trackpad gesture
 
     private func beginGesture(with event: CGEvent) -> Bool {
-        let location = event.location
-        let window: AXUIElement
-        let frame: CGRect
-        if let locked = lockedTarget, hypot(location.x - locked.cursor.x, location.y - locked.cursor.y) < 1,
-           let lockedFrame = locked.window.frame {
-            window = locked.window
-            frame = lockedFrame
-        } else {
-            guard let found = WindowLocator.window(at: location), let foundFrame = found.frame else {
-                lockedTarget = nil
-                return false
-            }
-            window = found
-            frame = foundFrame
-            applier.raise(window)
-        }
+        guard let window = WindowLocator.focusedWindow(), let frame = window.frame else { return false }
 
-        lockedTarget = LockedTarget(window: window, cursor: location)
         gesture = GestureSession(
             window: window,
             startFrame: frame,
@@ -170,7 +144,7 @@ final class ResizeController {
 
         let now = Date()
         if wheel == nil || now.timeIntervalSince(wheel!.lastEvent) > Self.wheelSessionTimeout {
-            guard let window = WindowLocator.window(at: event.location), let frame = window.frame else {
+            guard let window = WindowLocator.focusedWindow(), let frame = window.frame else {
                 wheel = nil
                 return event
             }

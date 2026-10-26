@@ -78,6 +78,14 @@ enum WindowLocator {
         return nil
     }
 
+    /// The focused window of the frontmost app, if it can be moved/resized.
+    static func focusedWindow() -> AXUIElement? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        guard let window: AXUIElement = app.attribute(kAXFocusedWindowAttribute), isEligible(window) else { return nil }
+        return window
+    }
+
     private static func windowViaHitTest(at point: CGPoint) -> AXUIElement? {
         var element: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
