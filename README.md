@@ -2,6 +2,8 @@
 
 KDE Plasma-style window management for macOS, living in the menu bar.
 
+![PlasmaDrag menu bar popup with the Tile Windows grid](docs/screenshot-menu.png)
+
 | Gesture | Action |
 | --- | --- |
 | Option + left-drag anywhere in a window | Move the window (kept within the display under the cursor) |
