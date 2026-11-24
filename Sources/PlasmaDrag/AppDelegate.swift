@@ -4,16 +4,35 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let enabledKey = "enabled"
+    private static let greenButtonFillsWindowKey = "greenButtonFillsWindow"
 
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var trustPollTimer: Timer?
     private let engine = GestureEngine()
+    private lazy var greenButton = GreenButtonController()
     private var appNapActivity: NSObjectProtocol?
+
+    private lazy var layoutPicker: LayoutPickerView = {
+        let picker = LayoutPickerView()
+        picker.onSelect = { [weak self] layout in
+            guard AXIsProcessTrusted() else {
+                self?.requestAccessibility()
+                return
+            }
+            Tiler.apply(layout)
+        }
+        return picker
+    }()
 
     private var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: Self.enabledKey) }
+    }
+
+    private var greenButtonFillsWindow: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.greenButtonFillsWindowKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.greenButtonFillsWindowKey) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,11 +67,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !engine.start() {
             NSLog("PlasmaDrag: failed to create event taps")
         }
+        updateGreenButton()
         updateStatusIcon()
+    }
+
+    private func updateGreenButton() {
+        guard isEnabled, greenButtonFillsWindow, AXIsProcessTrusted() else {
+            greenButton.stop()
+            return
+        }
+        if !greenButton.start() {
+            NSLog("PlasmaDrag: failed to create the green button event tap")
+        }
     }
 
     @objc private func systemDidWake() {
         engine.systemDidWake()
+        if isEnabled, greenButtonFillsWindow {
+            greenButton.systemDidWake()
+            updateGreenButton()
+        }
     }
 
     // MARK: - Accessibility
@@ -113,10 +147,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let tileHeader = NSMenuItem(title: "Tile Windows", action: nil, keyEquivalent: "")
+        tileHeader.isEnabled = false
+        menu.addItem(tileHeader)
+
+        let pickerItem = NSMenuItem()
+        pickerItem.view = layoutPicker
+        menu.addItem(pickerItem)
+
+        menu.addItem(.separator())
+
         let enabledItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
         enabledItem.target = self
         enabledItem.state = isEnabled ? .on : .off
         menu.addItem(enabledItem)
+
+        let greenButtonItem = NSMenuItem(
+            title: "Green Button Fills Window", action: #selector(toggleGreenButton), keyEquivalent: ""
+        )
+        greenButtonItem.target = self
+        greenButtonItem.state = greenButtonFillsWindow ? .on : .off
+        menu.addItem(greenButtonItem)
 
         if AXIsProcessTrusted() {
             let item = NSMenuItem(title: "Accessibility: Granted", action: nil, keyEquivalent: "")
@@ -135,6 +186,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
+        let about = NSMenuItem(title: "About PlasmaDrag", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+
         let quit = NSMenuItem(title: "Quit PlasmaDrag", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
@@ -146,8 +201,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !AXIsProcessTrusted() { requestAccessibility() }
         } else {
             engine.stop()
+            greenButton.stop()
         }
         updateStatusIcon()
+    }
+
+    @objc private func toggleGreenButton() {
+        greenButtonFillsWindow.toggle()
+        if isEnabled, greenButtonFillsWindow, !AXIsProcessTrusted() {
+            requestAccessibility()
+        } else {
+            updateGreenButton()
+        }
+    }
+
+    @objc private func showAbout() {
+        // A menu bar app isn't active by default, so the panel would open
+        // behind other windows.
+        NSApp.activate()
+        let credits = NSAttributedString(
+            string: "KDE Plasma-style window moving, resizing and tiling for macOS.",
+            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
+        )
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
     @objc private func grantAccess() {

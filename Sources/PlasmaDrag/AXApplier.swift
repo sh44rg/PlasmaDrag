@@ -25,6 +25,12 @@ final class AXApplier {
         submit(.resize(window, size))
     }
 
+    /// Resizes ahead of any later coalesced move or resize, without being
+    /// dropped by latest-wins coalescing.
+    func resizeNow(_ window: AXUIElement, to size: CGSize) {
+        queue.async { window.setSize(size) }
+    }
+
     func raise(_ window: AXUIElement) {
         queue.async {
             AXUIElementPerformAction(window, kAXRaiseAction as CFString)

@@ -15,9 +15,14 @@ extension AXUIElement {
 
     var frame: CGRect? {
         let values = attributes([kAXPositionAttribute, kAXSizeAttribute])
-        guard let position = axValue(values[0], .cgPoint, CGPoint.zero),
-              let size = axValue(values[1], .cgSize, CGSize.zero) else { return nil }
-        return CGRect(origin: position, size: size)
+        return axFrame(position: values[0], size: values[1])
+    }
+
+    func stateForFill() -> (frame: CGRect, isFullScreen: Bool)? {
+        let values = attributes([kAXPositionAttribute, kAXSizeAttribute, "AXFullScreen", kAXRoleAttribute])
+        guard values[3] as? String == kAXWindowRole as String,
+              let frame = axFrame(position: values[0], size: values[1]) else { return nil }
+        return (frame, values[2] as? Bool == true)
     }
 
     @discardableResult
@@ -54,6 +59,12 @@ private func axElement(_ value: AnyObject?) -> AXUIElement? {
     return (value as! AXUIElement)
 }
 
+private func axFrame(position: AnyObject?, size: AnyObject?) -> CGRect? {
+    guard let position = axValue(position, .cgPoint, CGPoint.zero),
+          let size = axValue(size, .cgSize, CGSize.zero) else { return nil }
+    return CGRect(origin: position, size: size)
+}
+
 private func axValue<T: BitwiseCopyable>(_ value: AnyObject?, _ type: AXValueType, _ initial: T) -> T? {
     guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
     var result = initial
@@ -80,6 +91,35 @@ enum WindowLocator {
     struct Target {
         let window: AXUIElement
         let frame: CGRect
+    }
+
+    struct GreenButton {
+        let element: AXUIElement
+        let window: AXUIElement
+        let frame: CGRect
+        let pid: pid_t
+    }
+
+    static func greenButton(at point: CGPoint, pid: pid_t) -> GreenButton? {
+        guard pid > 0, pid != ownPID else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        // This runs before the original click can be delivered. Bound each
+        // synchronous AX request and let unconfirmed clicks through.
+        AXUIElementSetMessagingTimeout(app, 0.02)
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success,
+              let element = hit else { return nil }
+        AXUIElementSetMessagingTimeout(element, 0.02)
+        let values = element.attributes([
+            kAXSubroleAttribute, kAXEnabledAttribute, kAXWindowAttribute, kAXPositionAttribute, kAXSizeAttribute,
+            kAXTopLevelUIElementAttribute, kAXParentAttribute,
+        ])
+        let subrole = values[0] as? String
+        guard subrole == NSAccessibility.Subrole.fullScreenButton.rawValue || subrole == kAXZoomButtonSubrole as String,
+              (values[1] as? Bool) != false,
+              let window = axElement(values[2]) ?? axElement(values[5]) ?? axElement(values[6]),
+              let frame = axFrame(position: values[3], size: values[4]), frame.contains(point) else { return nil }
+        return GreenButton(element: element, window: window, frame: frame, pid: pid)
     }
 
     /// Cached per process so the Launch Services lookup happens once per app.
@@ -109,6 +149,53 @@ enum WindowLocator {
               let size = axValue(values[1], .cgSize, CGSize.zero) else { return nil }
 
         return Target(window: window, frame: CGRect(origin: position, size: size))
+    }
+
+    /// Standard windows currently visible on screen, ordered front to back.
+    /// Minimized, hidden, fullscreen and non-standard (panel, dialog) windows
+    /// are skipped.
+    static func visibleWindows() -> [Target] {
+        guard let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return [] }
+
+        var candidatesByPID: [pid_t: [Target]] = [:]
+        var result: [Target] = []
+
+        for info in infos {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, !isIgnored(pid),
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict),
+                  bounds.width >= 60, bounds.height >= 60 else { continue }
+
+            if candidatesByPID[pid] == nil { candidatesByPID[pid] = standardWindows(of: pid) }
+            guard let index = candidatesByPID[pid]?.firstIndex(where: { framesMatch($0.frame, bounds) }),
+                  let match = candidatesByPID[pid]?.remove(at: index) else { continue }
+            result.append(match)
+        }
+        return result
+    }
+
+    private static func standardWindows(of pid: pid_t) -> [Target] {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.5)
+        guard let windows: [AXUIElement] = app.attribute(kAXWindowsAttribute) else { return [] }
+        return windows.compactMap { window in
+            let values = window.attributes([
+                kAXPositionAttribute, kAXSizeAttribute, kAXSubroleAttribute, "AXFullScreen", kAXMinimizedAttribute,
+            ])
+            guard values[2] as? String == kAXStandardWindowSubrole as String,
+                  (values[3] as? Bool) != true, (values[4] as? Bool) != true,
+                  let position = axValue(values[0], .cgPoint, CGPoint.zero),
+                  let size = axValue(values[1], .cgSize, CGSize.zero) else { return nil }
+            return Target(window: window, frame: CGRect(origin: position, size: size))
+        }
+    }
+
+    private static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2
+            && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
     }
 
     private static func isIgnored(_ pid: pid_t) -> Bool {

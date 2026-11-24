@@ -14,9 +14,9 @@ final class MoveController {
 
     private struct Session {
         let window: AXUIElement
-        let size: CGSize
+        var size: CGSize
         let startMouse: CGPoint
-        let startOrigin: CGPoint
+        var startOrigin: CGPoint
         let downEvent: CGEvent
         let screenBounds: [CGRect]
         var lastOrigin: CGPoint
@@ -83,6 +83,16 @@ final class MoveController {
             session = pendingSession
             applier.beginInteraction(with: session.window)
             applier.raise(session.window)
+
+            // Dragging a tiled window out of its tile gives it back the size
+            // it had before tiling, keeping the grab point under the cursor.
+            let frame = CGRect(origin: session.startOrigin, size: session.size)
+            if let size = TileMemory.shared.claimOriginalSize(of: session.window, currentFrame: frame) {
+                let restored = TileMemory.restoredFrame(size: size, from: frame, grabbedAt: session.startMouse)
+                session.size = restored.size
+                session.startOrigin = restored.origin
+                applier.resizeNow(session.window, to: restored.size)
+            }
         case let .dragging(draggingSession):
             session = draggingSession
         }
